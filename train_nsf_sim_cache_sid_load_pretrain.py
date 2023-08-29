@@ -5,10 +5,12 @@ sys.path.append(os.path.join(now_dir))
 sys.path.append(os.path.join(now_dir, "train"))
 import utils
 import datetime
+import asyncio
 
 hps = utils.get_hparams()
 os.environ["CUDA_VISIBLE_DEVICES"] = hps.gpus.replace("-", ",")
 n_gpus = len(hps.gpus.split("-"))
+print("n_gpus:", n_gpus)
 from random import shuffle, randint
 import traceback, json, argparse, itertools, math, torch, pdb
 
@@ -51,6 +53,17 @@ from process_ckpt import savee
 
 global_step = 0
 
+# Configuration class
+from bullmq import Queue, Worker, Job
+class Config:
+    QUEUE_NAME = os.getenv("QUEUE_NAME")
+    REDIS_OPTS = {
+        "host": os.getenv("REDIS_HOST"),
+        "port": int(os.getenv("REDIS_PORT")),
+        "password": os.getenv("REDIS_PASSWORD")
+    }
+# Create the training REDIS queue
+training_queue = Queue(Config.QUEUE_NAME, Config.REDIS_OPTS)
 
 class EpochRecorder:
     def __init__(self):
@@ -218,6 +231,10 @@ def run(rank, n_gpus, hps):
     scaler = GradScaler(enabled=hps.train.fp16_run)
 
     cache = []
+    if hps.job_id != "":
+        loop = asyncio.get_event_loop()
+        job = loop.run_until_complete(Job.fromId(training_queue, hps.job_id))
+        
     for epoch in range(epoch_str, hps.train.epochs + 1):
         if rank == 0:
             train_and_evaluate(
@@ -232,6 +249,7 @@ def run(rank, n_gpus, hps):
                 logger,
                 [writer, writer_eval],
                 cache,
+                job
             )
         else:
             train_and_evaluate(
@@ -246,13 +264,14 @@ def run(rank, n_gpus, hps):
                 None,
                 None,
                 cache,
+                job
             )
         scheduler_g.step()
         scheduler_d.step()
 
 
 def train_and_evaluate(
-    rank, epoch, hps, nets, optims, schedulers, scaler, loaders, logger, writers, cache
+    rank, epoch, hps, nets, optims, schedulers, scaler, loaders, logger, writers, cache, job=None
 ):
     net_g, net_d = nets
     optim_g, optim_d = optims
@@ -570,7 +589,17 @@ def train_and_evaluate(
             )
 
     if rank == 0:
-        logger.info("====> Epoch: {} {}".format(epoch, epoch_recorder.record()))
+        # Calculate progress based on hps.total_epoch and hps.epoch
+        PROGRESS = int(15 + ((epoch / hps.total_epoch) * (100 - 15)))
+        logger.info(f"====> Epoch: {epoch} {epoch_recorder.record()} Progress: {PROGRESS}%")
+        # Update job progress in Redis
+        try:
+            if hps.job_id != "" and job is not None:
+                loop = asyncio.get_event_loop()
+                loop.run_until_complete(job.updateProgress(PROGRESS))
+        except Exception as e:
+            print(f"Error updating job progress: {e}")
+        
     if epoch >= hps.total_epoch and rank == 0:
         logger.info("Training is done. The program is closed.")
 
