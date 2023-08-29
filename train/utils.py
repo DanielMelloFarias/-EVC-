@@ -352,6 +352,13 @@ def get_hparams(init=True):
         required=True,
         help="if caching the dataset in GPU memory, 1 or 0",
     )
+    parser.add_argument(
+        "-job_id",
+        "--job_id",
+        type=int,
+        required=False,
+        help="The Redis job id, used for training",
+    )
 
     args = parser.parse_args()
     name = args.experiment_dir
@@ -391,6 +398,7 @@ def get_hparams(init=True):
     hparams.save_every_weights = args.save_every_weights
     hparams.if_cache_data_in_gpu = args.if_cache_data_in_gpu
     hparams.data.training_files = "%s/filelist.txt" % experiment_dir
+    hparams.job_id = args.job_id
     return hparams
 
 
