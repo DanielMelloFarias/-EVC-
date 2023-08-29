@@ -271,7 +271,7 @@ def run(rank, n_gpus, hps):
 
 
 def train_and_evaluate(
-    rank, epoch, hps, nets, optims, schedulers, scaler, loaders, logger, writers, cache, job=None
+    rank, epoch, hps, nets, optims, schedulers, scaler, loaders, logger, writers, cache, job=None, early_stopping=False
 ):
     net_g, net_d = nets
     optim_g, optim_d = optims
@@ -369,6 +369,9 @@ def train_and_evaluate(
 
     # Run steps
     epoch_recorder = EpochRecorder()
+    min_val_loss = 999999999
+    patience_counter = 0
+    patience_limit = 10
     for batch_idx, info in data_iterator:
         # Data
         ## Unpack
@@ -532,6 +535,20 @@ def train_and_evaluate(
                     images=image_dict,
                     scalars=scalar_dict,
                 )
+                if early_stopping: 
+                    val_loss = loss_gen_all + loss_mel  # Updated validation loss calculation
+                    print("val_loss:", val_loss)
+                    print("min_val_loss:", min_val_loss)
+                    if val_loss < min_val_loss:
+                        min_val_loss = val_loss
+                        patience_counter = 0
+                    else:
+                        patience_counter += 1
+                    print("patience_counter:", patience_counter)
+
+                    if patience_counter > patience_limit:
+                        print("Early stopping")
+                        break
         global_step += 1
     # /Run steps
 
